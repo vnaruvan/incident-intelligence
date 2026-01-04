@@ -1,0 +1,50 @@
+/* app/static/docs.css */
+body {
+    background: #0b1220;
+  }
+  
+  .swagger-ui {
+    font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
+    color: #c9d1d9;
+  }
+  
+  .swagger-ui .topbar {
+    background: #0b1220;
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+  }
+  
+  .swagger-ui .topbar a span {
+    color: #e6edf3;
+  }
+  
+  .swagger-ui .info .title {
+    color: #e6edf3;
+  }
+  
+  .swagger-ui .scheme-container {
+    background: transparent;
+    box-shadow: none;
+    padding: 0;
+  }
+  
+  .swagger-ui .opblock {
+    border-radius: 14px;
+    overflow: hidden;
+    border: 1px solid rgba(255,255,255,0.10);
+    box-shadow: none;
+  }
+  
+  .swagger-ui .opblock-tag {
+    background: rgba(255,255,255,0.03);
+    color: #e6edf3;
+  }
+  
+  .swagger-ui .btn {
+    border-radius: 10px;
+  }
+  
+  .swagger-ui input[type="text"],
+  .swagger-ui textarea {
+    border-radius: 10px;
+  }
+  

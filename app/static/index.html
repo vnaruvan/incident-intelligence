@@ -1,0 +1,219 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Incident Intelligence UI</title>
+  <style>
+    body { font-family: system-ui, Arial; margin: 24px; max-width: 1100px; }
+    .row { display: flex; gap: 12px; flex-wrap: wrap; }
+    .card { border: 1px solid #ddd; padding: 12px; border-radius: 8px; margin: 12px 0; }
+    input, textarea, select { width: 100%; padding: 8px; }
+    button { padding: 8px 12px; cursor: pointer; }
+    pre { background: #f6f6f6; padding: 10px; overflow: auto; }
+    .small { font-size: 12px; color: #555; }
+    .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .grid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+  </style>
+</head>
+<body>
+  <h1>Incident Intelligence UI</h1>
+  <div class="small">
+    Demo-only: stores API key in localStorage. Do not do this in production.
+  </div>
+
+  <div class="card">
+    <h2>Auth</h2>
+    <div class="row">
+      <div style="flex:1; min-width: 320px;">
+        <label>API Key (X-API-Key)</label>
+        <input id="apiKey" placeholder="paste key here" />
+      </div>
+      <div style="display:flex; gap:8px; align-items:flex-end;">
+        <button onclick="saveKey()">Save</button>
+        <button onclick="clearKey()">Clear</button>
+        <button onclick="whoami()">/api/me</button>
+      </div>
+    </div>
+    <pre id="meOut">{}</pre>
+  </div>
+
+  <div class="card">
+    <h2>Create Incident</h2>
+    <div class="grid3">
+      <div>
+        <label>service</label>
+        <input id="c_service" value="payments" />
+      </div>
+      <div>
+        <label>severity</label>
+        <select id="c_severity">
+          <option>low</option><option>medium</option><option selected>high</option><option>critical</option>
+        </select>
+      </div>
+      <div>
+        <label>source</label>
+        <input id="c_source" value="ui" />
+      </div>
+    </div>
+
+    <div class="grid2">
+      <div>
+        <label>title</label>
+        <input id="c_title" value="DB timeout spike" />
+      </div>
+      <div>
+        <label>reporter</label>
+        <input id="c_reporter" value="oncall" />
+      </div>
+    </div>
+
+    <div class="grid2">
+      <div>
+        <label>tags (comma-separated)</label>
+        <input id="c_tags" value="db,timeout" />
+      </div>
+      <div>
+        <label>affected_sys</label>
+        <input id="c_aff" placeholder="optional" />
+      </div>
+    </div>
+
+    <label>message</label>
+    <textarea id="c_message" rows="4">Timeout to postgres at 10.0.0.12. User email: test@example.com</textarea>
+
+    <div class="row" style="margin-top: 8px;">
+      <button onclick="createIncident()">Create</button>
+    </div>
+
+    <pre id="createOut">{}</pre>
+  </div>
+
+  <div class="card">
+    <h2>Search</h2>
+    <div class="row">
+      <div style="flex:1; min-width: 320px;">
+        <label>q</label>
+        <input id="s_q" value="timeout" />
+      </div>
+      <div style="width: 120px;">
+        <label>top_k</label>
+        <input id="s_k" type="number" value="10" min="1" max="50" />
+      </div>
+      <div style="display:flex; gap:8px; align-items:flex-end;">
+        <button onclick="search()">Search</button>
+        <button onclick="loadAudit()">Audit logs</button>
+      </div>
+    </div>
+
+    <div class="row">
+      <div style="flex:1;">
+        <h3>Results</h3>
+        <pre id="searchOut">[]</pre>
+      </div>
+      <div style="flex:1;">
+        <h3>Selected Incident</h3>
+        <div class="row">
+          <input id="incidentId" placeholder="incident id" style="max-width: 140px;" />
+          <button onclick="getIncident()">GET redacted</button>
+          <button onclick="getRaw()">GET raw</button>
+        </div>
+        <pre id="incidentOut">{}</pre>
+      </div>
+    </div>
+
+    <h3>Audit logs</h3>
+    <pre id="auditOut">[]</pre>
+  </div>
+
+<script>
+  const base = "";
+
+  function getKey() {
+    return document.getElementById("apiKey").value.trim();
+  }
+
+  function headers() {
+    const k = getKey();
+    return {
+      "Content-Type": "application/json",
+      "Accept": "application/json",
+      "X-API-Key": k
+    };
+  }
+
+  function saveKey() {
+    const k = getKey();
+    localStorage.setItem("ii_api_key", k);
+    alert("Saved");
+  }
+
+  function clearKey() {
+    localStorage.removeItem("ii_api_key");
+    document.getElementById("apiKey").value = "";
+    document.getElementById("meOut").textContent = "{}";
+  }
+
+  async function whoami() {
+    const r = await fetch(base + "/api/me", { headers: headers() });
+    document.getElementById("meOut").textContent = JSON.stringify(await r.json(), null, 2);
+  }
+
+  async function createIncident() {
+    const payload = {
+      service: document.getElementById("c_service").value,
+      severity: document.getElementById("c_severity").value,
+      title: document.getElementById("c_title").value,
+      affected_sys: document.getElementById("c_aff").value || null,
+      reporter: document.getElementById("c_reporter").value,
+      source: document.getElementById("c_source").value,
+      tags: document.getElementById("c_tags").value.split(",").map(s => s.trim()).filter(Boolean),
+      message: document.getElementById("c_message").value,
+      stack_trace: null
+    };
+
+    const r = await fetch(base + "/api/incidents", {
+      method: "POST",
+      headers: headers(),
+      body: JSON.stringify(payload)
+    });
+
+    const j = await r.json();
+    document.getElementById("createOut").textContent = JSON.stringify(j, null, 2);
+    if (j && j.id) document.getElementById("incidentId").value = j.id;
+  }
+
+  async function search() {
+    const q = encodeURIComponent(document.getElementById("s_q").value);
+    const k = document.getElementById("s_k").value;
+    const r = await fetch(base + `/api/search?q=${q}&top_k=${k}`, { headers: headers() });
+    const j = await r.json();
+    document.getElementById("searchOut").textContent = JSON.stringify(j, null, 2);
+    if (Array.isArray(j) && j.length) document.getElementById("incidentId").value = j[0].id;
+  }
+
+  async function getIncident() {
+    const id = document.getElementById("incidentId").value;
+    const r = await fetch(base + `/api/incidents/${id}?include_deleted=false`, { headers: headers() });
+    document.getElementById("incidentOut").textContent = JSON.stringify(await r.json(), null, 2);
+  }
+
+  async function getRaw() {
+    const id = document.getElementById("incidentId").value;
+    const r = await fetch(base + `/api/incidents/${id}/raw`, { headers: headers() });
+    document.getElementById("incidentOut").textContent = JSON.stringify(await r.json(), null, 2);
+  }
+
+  async function loadAudit() {
+    const r = await fetch(base + `/api/audit-logs?limit=50`, { headers: headers() });
+    document.getElementById("auditOut").textContent = JSON.stringify(await r.json(), null, 2);
+  }
+
+  (function init() {
+    const saved = localStorage.getItem("ii_api_key");
+    if (saved) document.getElementById("apiKey").value = saved;
+  })();
+</script>
+</body>
+</html>
+

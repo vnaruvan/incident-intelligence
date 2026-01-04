@@ -1,0 +1,210 @@
+<!-- app/static/console.html -->
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Incident Intelligence Console</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+  </head>
+
+  <body class="bg-slate-950 text-slate-100">
+    <div class="max-w-6xl mx-auto p-6 space-y-6">
+      <header class="flex items-center justify-between">
+        <div>
+          <h1 class="text-2xl font-semibold">Incident Intelligence</h1>
+          <p class="text-slate-400">Demo console (API key auth)</p>
+        </div>
+        <div class="flex gap-2">
+          <a class="px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700" href="/docs">Docs</a>
+          <a class="px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700" href="/redoc">ReDoc</a>
+        </div>
+      </header>
+
+      <section class="grid md:grid-cols-2 gap-4">
+        <div class="bg-slate-900 rounded-2xl p-4 border border-slate-800">
+          <h2 class="text-lg font-semibold">Connection</h2>
+
+          <div class="mt-3 space-y-3">
+            <label class="block">
+              <span class="text-slate-300 text-sm">API Base</span>
+              <input id="baseUrl" class="mt-1 w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800"
+                     value="http://localhost:8000" />
+            </label>
+
+            <label class="block">
+              <span class="text-slate-300 text-sm">X-API-Key</span>
+              <input id="apiKey" class="mt-1 w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800"
+                     placeholder="paste api key here" />
+            </label>
+
+            <div class="flex gap-2">
+              <button id="btnWhoami"
+                      class="px-3 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-600">
+                Who am I
+              </button>
+              <button id="btnClear"
+                      class="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700">
+                Clear output
+              </button>
+            </div>
+
+            <pre id="whoamiOut" class="text-xs bg-slate-950 border border-slate-800 rounded-xl p-3 overflow-auto min-h-[80px]"></pre>
+          </div>
+        </div>
+
+        <div class="bg-slate-900 rounded-2xl p-4 border border-slate-800">
+          <h2 class="text-lg font-semibold">Output</h2>
+          <pre id="out" class="mt-3 text-xs bg-slate-950 border border-slate-800 rounded-xl p-3 overflow-auto min-h-[220px]"></pre>
+        </div>
+      </section>
+
+      <section class="grid md:grid-cols-2 gap-4">
+        <div class="bg-slate-900 rounded-2xl p-4 border border-slate-800 space-y-3">
+          <h2 class="text-lg font-semibold">Create incident</h2>
+
+          <div class="grid grid-cols-2 gap-3">
+            <input id="svc" class="px-3 py-2 rounded-xl bg-slate-950 border border-slate-800" placeholder="service (payments)" />
+            <input id="sev" class="px-3 py-2 rounded-xl bg-slate-950 border border-slate-800" placeholder="severity (high)" />
+          </div>
+
+          <input id="title" class="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800" placeholder="title" />
+          <textarea id="msg" class="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800"
+                    rows="4" placeholder="message (include an email to see redaction)"></textarea>
+
+          <div class="grid grid-cols-2 gap-3">
+            <input id="source" class="px-3 py-2 rounded-xl bg-slate-950 border border-slate-800" placeholder="source (api)" />
+            <input id="reporter" class="px-3 py-2 rounded-xl bg-slate-950 border border-slate-800" placeholder="reporter (oncall)" />
+          </div>
+
+          <input id="tags" class="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800"
+                 placeholder='tags as comma list: db,timeout' />
+
+          <button id="btnCreate" class="px-3 py-2 rounded-xl bg-indigo-700 hover:bg-indigo-600">
+            POST /api/incidents
+          </button>
+        </div>
+
+        <div class="bg-slate-900 rounded-2xl p-4 border border-slate-800 space-y-3">
+          <h2 class="text-lg font-semibold">Search and audit</h2>
+
+          <div class="flex gap-2">
+            <input id="q" class="flex-1 px-3 py-2 rounded-xl bg-slate-950 border border-slate-800" placeholder="search query" />
+            <input id="k" class="w-20 px-3 py-2 rounded-xl bg-slate-950 border border-slate-800" value="5" />
+          </div>
+
+          <div class="flex gap-2">
+            <button id="btnSearch" class="px-3 py-2 rounded-xl bg-indigo-700 hover:bg-indigo-600">
+              GET /api/search
+            </button>
+            <button id="btnAudit" class="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700">
+              GET /api/audit-logs
+            </button>
+          </div>
+
+          <div class="flex gap-2">
+            <input id="incidentId" class="flex-1 px-3 py-2 rounded-xl bg-slate-950 border border-slate-800" placeholder="incident id" />
+            <button id="btnGet" class="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700">
+              GET /api/incidents/{id}
+            </button>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <script>
+      const $ = (id) => document.getElementById(id);
+
+      function cfg() {
+        const baseUrl = $("baseUrl").value.replace(/\/$/, "");
+        const apiKey = $("apiKey").value.trim();
+        if (!apiKey) throw new Error("Missing X-API-Key");
+        return { baseUrl, apiKey };
+      }
+
+      async function call(method, path, body) {
+        const { baseUrl, apiKey } = cfg();
+        const res = await fetch(baseUrl + path, {
+          method,
+          headers: {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "X-API-Key": apiKey,
+          },
+          body: body ? JSON.stringify(body) : undefined,
+        });
+
+        const text = await res.text();
+        let payload;
+        try { payload = text ? JSON.parse(text) : null; } catch { payload = text; }
+
+        return { status: res.status, payload };
+      }
+
+      function print(where, obj) {
+        where.textContent = JSON.stringify(obj, null, 2);
+      }
+
+      $("btnClear").onclick = () => { $("out").textContent = ""; };
+
+      $("btnWhoami").onclick = async () => {
+        try {
+          const r = await call("GET", "/api/me");
+          print($("whoamiOut"), r);
+        } catch (e) {
+          print($("whoamiOut"), { error: String(e) });
+        }
+      };
+
+      $("btnCreate").onclick = async () => {
+        try {
+          const tags = $("tags").value.split(",").map(s => s.trim()).filter(Boolean);
+          const body = {
+            service: $("svc").value || null,
+            severity: $("sev").value || null,
+            title: $("title").value || null,
+            message: $("msg").value || "",
+            source: $("source").value || null,
+            reporter: $("reporter").value || null,
+            tags: tags.length ? tags : null,
+          };
+          const r = await call("POST", "/api/incidents", body);
+          print($("out"), r);
+          if (r.payload && r.payload.id) $("incidentId").value = r.payload.id;
+        } catch (e) {
+          print($("out"), { error: String(e) });
+        }
+      };
+
+      $("btnGet").onclick = async () => {
+        try {
+          const id = $("incidentId").value.trim();
+          const r = await call("GET", `/api/incidents/${id}?include_deleted=false`);
+          print($("out"), r);
+        } catch (e) {
+          print($("out"), { error: String(e) });
+        }
+      };
+
+      $("btnSearch").onclick = async () => {
+        try {
+          const q = encodeURIComponent($("q").value.trim());
+          const k = encodeURIComponent($("k").value.trim() || "5");
+          const r = await call("GET", `/api/search?q=${q}&top_k=${k}`);
+          print($("out"), r);
+        } catch (e) {
+          print($("out"), { error: String(e) });
+        }
+      };
+
+      $("btnAudit").onclick = async () => {
+        try {
+          const r = await call("GET", `/api/audit-logs?limit=50`);
+          print($("out"), r);
+        } catch (e) {
+          print($("out"), { error: String(e) });
+        }
+      };
+    </script>
+  </body>
+</html>
