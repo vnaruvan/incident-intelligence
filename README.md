@@ -1,48 +1,58 @@
 # Incident Intelligence
 
-Incident Intelligence is a production-minded incident log service focused on:
+Incident Intelligence is a small, production-minded incident log service focused on:
 
 1. Safe storage of incident text with redaction
-2. Search that continues to work when external embedding providers are unavailable
-3. Auditability via a tamper-evident per-tenant audit chain
+2. Search that still works when external embedding providers are unavailable
+3. Auditability via a tamper-evident, per-tenant audit chain
 
-It exposes a FastAPI REST API, stores data in Postgres, and uses pgvector for similarity search.
+It exposes a FastAPI REST API, stores data in Postgres, and uses pgvector for vector similarity search.
 
 ## Why this exists
 
-Many incident tools either store raw JSON blobs with weak governance, or they bolt on embedding search that degrades or breaks when the provider rate limits. This project is built to be reviewable from a clean local clone and to keep core functionality working at $0.
+Many incident tools either store raw JSON blobs with weak governance, or they add "AI search" in a way that stops working when an embedding provider rate limits or billing is not configured. This project is built to be reviewable from a clean local clone and to keep its core features working at $0 using deterministic local embeddings.
 
 ## Core features
 
 - Multi-tenant incident storage with explicit fields (not JSON-only)
-- Redaction pipeline for message text (emails, PANs, tokens, etc.)
+- Redaction pipeline for message text (emails, PANs, tokens, credentials)
 - RBAC via API keys (viewer, responder, auditor, admin)
-- Similarity search using pgvector
-- Deterministic local embeddings mode for offline, zero-cost demos
-- Audit log with a per-tenant SHA256 hash chain (tamper-evident)
+- Vector similarity search via pgvector
+- Deterministic local embeddings mode for offline, zero-cost demo
+- Audit log with a per-tenant hash chain (tamper-evident)
 - Health and readiness endpoints (`/health`, `/ready`)
 - Lightweight demo UI (`/ui`) and API docs (`/docs`, `/redoc`)
 
 ## Architecture
 
-### Tenant isolation and request path
+### Tenant isolation and RBAC
 
 ```mermaid
 flowchart LR
-    C[Client] -->|X-API-Key| API[FastAPI]
-    
-    API --> AUTH[Auth + RBAC]
-    AUTH -->|tenant_id + role| API
-    
-    API --> REDACT[Redaction]
-    API --> EMB[Embeddings: local or OpenAI]
-    API --> DB[(Postgres + pgvector)]
-    
-    API --> AUDIT[Audit append]
-    AUDIT --> DB
+    subgraph Tenants
+        demoTenant[tenant: demo]
+        acmeTenant[tenant: acme]
+    end
+
+    subgraph Roles
+        viewerRole[viewer: read + search]
+        responderRole[responder: create + read raw + update]
+        auditorRole[auditor: audit logs + include deleted]
+        adminRole[admin: full access + key management]
+    end
+
+    demoTenant --> viewerRole
+    demoTenant --> responderRole
+    demoTenant --> auditorRole
+    demoTenant --> adminRole
+
+    acmeTenant --> viewerRole
+    acmeTenant --> responderRole
+    acmeTenant --> auditorRole
+    acmeTenant --> adminRole
 ```
 
-### Create + search flow
+### Request flow
 
 ```mermaid
 sequenceDiagram
@@ -50,14 +60,14 @@ sequenceDiagram
     participant API as FastAPI
     participant R as Redaction
     participant E as Embeddings
-    participant DB as PostgreSQL
+    participant DB as Postgres
 
     C->>API: POST /api/incidents (X-API-Key)
-    API->>API: Validate key, derive tenant_id and role
+    API->>API: Validate key, derive tenant and role
     API->>R: Redact message
     R-->>API: message_redacted
-    API->>E: Embed message (local or OpenAI)
-    E-->>API: vector (1536)
+    API->>E: Embed message (local or provider)
+    E-->>API: vector
     API->>DB: INSERT incident_logs
     API->>DB: INSERT audit_logs (hash chained)
     API-->>C: 200 IncidentLogRead
@@ -65,7 +75,7 @@ sequenceDiagram
     C->>API: GET /api/search?q=...
     API->>E: Embed query
     E-->>API: query_vector
-    API->>DB: Similarity search scoped to tenant_id
+    API->>DB: Vector similarity search scoped to tenant
     DB-->>API: top_k results
     API->>DB: INSERT audit_logs (hash chained)
     API-->>C: 200 [IncidentLogRead]
@@ -75,14 +85,14 @@ sequenceDiagram
 
 | Component | Purpose |
 |-----------|---------|
-| Multi-tenancy | All data filtered by tenant_id, enforced at query level |
-| PII redaction | Emails, PANs, AWS keys, JWTs stripped before storage |
-| Dual storage | message_raw (privileged) + message_redacted (default) |
-| Vector search | pgvector similarity search on 1536-d embeddings |
-| Audit chain | Per-tenant SHA256 hash chain for tamper evidence |
-| RBAC | 4 roles with escalating permissions |
+| Multi-tenancy | All reads and writes are scoped by tenant_id derived from the API key |
+| PII redaction | Emails, PANs, keys, JWT-like tokens, and similar secrets are stripped before storage |
+| Dual storage | message_raw is privileged, message_redacted is returned by default |
+| Vector search | pgvector similarity search on fixed-dimension embeddings |
+| Audit chain | Per-tenant SHA-256 hash chain provides tamper evidence |
+| RBAC | Roles gate privileged operations such as reading raw text and viewing audit logs |
 
-## Quickstart (one command)
+## Local quickstart
 
 ### Prerequisites
 
@@ -91,117 +101,183 @@ sequenceDiagram
 - `docker compose` available in your shell
 - `jq` (optional)
 
-### Run
+If port 5432 is already in use, stop the other container or change the host port in `docker-compose.yaml`.
 
-From the repo root:
+### One command (recommended)
+
+If you have `scripts/dev_up.sh`, use it as the primary reviewer path:
 
 ```bash
 ./scripts/dev_up.sh
 ```
 
-This brings up Postgres, runs migrations, bootstraps demo API keys, seeds demo incidents, and starts the API.
+**Expected outcome:**
+- Postgres starts via Docker Compose
+- Migrations are applied
+- Demo API keys are bootstrapped (plaintext printed once)
+- Demo incidents are seeded (optional, depending on your script)
+- API starts on port 8000
 
-### Open
-
+**Open:**
+- Home: http://localhost:8000/
 - UI: http://localhost:8000/ui
-- API docs: http://localhost:8000/docs
+- Swagger: http://localhost:8000/docs
+- ReDoc: http://localhost:8000/redoc
 - Health: http://localhost:8000/health
 - Readiness: http://localhost:8000/ready
 
-## Demo flow (copy paste)
+### Manual setup (debug path)
 
-Export a demo admin key printed by `bootstrap_demo_keys`:
+Use this if you want to run each step explicitly or troubleshoot.
+
+#### 1) Start Postgres
 
 ```bash
-export DEMO_KEY="paste_demo_admin_key_here"
+docker compose up -d db
+docker compose ps
 ```
 
-Create an incident:
+#### 2) Create database and enable pgvector
+
+```bash
+docker compose exec -T db createdb -U postgres incident_intel || true
+docker compose exec -T db psql -U postgres -d incident_intel -c "CREATE EXTENSION IF NOT EXISTS vector;"
+docker compose exec -T db psql -U postgres -d incident_intel -c "\dx"
+```
+
+#### 3) Run migrations
+
+```bash
+export DATABASE_URL="postgresql+psycopg2://postgres:postgres@localhost:5432/incident_intel"
+alembic upgrade head
+alembic current
+```
+
+Verify tables:
+
+```bash
+docker compose exec -T db psql -U postgres -d incident_intel -c "\dt"
+```
+
+#### 4) Bootstrap demo API keys
+
+This prints plaintext keys once. Store them locally.
+
+```bash
+export DATABASE_URL="postgresql+psycopg2://postgres:postgres@localhost:5432/incident_intel"
+python -m app.scripts.bootstrap_demo_keys
+```
+
+**Expected tenants:**
+- `demo` (admin, auditor, viewer)
+- `acme` (admin, viewer)
+
+#### 5) Seed demo incidents (recommended)
+
+```bash
+export DATABASE_URL="postgresql+psycopg2://postgres:postgres@localhost:5432/incident_intel"
+python -m app.scripts.seed_demo_incidents --count 150
+```
+
+#### 6) Run the API
+
+```bash
+export DATABASE_URL="postgresql+psycopg2://postgres:postgres@localhost:5432/incident_intel"
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+```
+
+## Demo flow
+
+### 1) Set an API key
+
+```bash
+export KEY="paste_key_here"
+```
+
+### 2) Create an incident
 
 ```bash
 curl -s -X POST "http://localhost:8000/api/incidents" \
   -H "Content-Type: application/json" \
-  -H "X-API-Key: $DEMO_KEY" \
+  -H "X-API-Key: $KEY" \
   --data-binary '{"service":"payments","severity":"high","title":"pg timeout","message":"postgres timeout for user test@example.com","source":"api","reporter":"oncall","tags":["db","timeout"]}' | jq
 ```
 
-Search:
+### 3) Search
 
 ```bash
 curl -s "http://localhost:8000/api/search?q=postgres%20timeout&top_k=5" \
-  -H "X-API-Key: $DEMO_KEY" | jq '.[].message_redacted'
+  -H "X-API-Key: $KEY" | jq '.[].message_redacted'
 ```
 
-View audit logs:
+**Note:** If you pass `q=` with an empty string, FastAPI returns 422 because `q` has `min_length=1`.
+
+### 4) Read an incident
 
 ```bash
-curl -s "http://localhost:8000/api/audit-logs?limit=20" \
-  -H "X-API-Key: $DEMO_KEY" | jq
+curl -s "http://localhost:8000/api/incidents/1?include_deleted=false" \
+  -H "X-API-Key: $KEY" | jq
 ```
 
-### Tenant isolation sanity check
-
-Create an incident using an `acme` key, then try to read it using a `demo` key. You should get 404.
+### 5) View audit logs
 
 ```bash
-export ACME_KEY="paste_acme_admin_key_here"
+curl -s "http://localhost:8000/api/audit-logs?limit=50" \
+  -H "X-API-Key: $KEY" | jq
+```
 
-ACME_ID=$(curl -s -X POST "http://localhost:8000/api/incidents" \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: $ACME_KEY" \
-  --data-binary '{"service":"payments","severity":"high","title":"acme incident","message":"acme db timeout","source":"api","reporter":"oncall","tags":["acme","db"]}' | jq -r '.id')
+### 6) Tenant isolation check (expected 404)
+
+Use a demo key to attempt reading an acme incident ID:
+
+```bash
+export DEMO_KEY="paste_demo_key_here"
+export ACME_ID="paste_acme_incident_id_here"
 
 curl -i -s "http://localhost:8000/api/incidents/$ACME_ID?include_deleted=false" \
   -H "X-API-Key: $DEMO_KEY" | head -n 20
 ```
 
-Expected: `HTTP/1.1 404 Not Found`
+**Expected:** `404 Not Found` with `{"detail":"Incident not found"}`.
 
 ## Configuration
 
-Copy `.env.example` to `.env` and adjust as needed.
+Create a local `.env` (not committed) based on `.env.example`.
+
+### Environment variables
 
 **Required:**
 - `DATABASE_URL`
 
 **Optional:**
-- `EMBEDDINGS_MODE` (default: local deterministic)
-- `OPENAI_API_KEY` (only if you want external embeddings)
-- `VECTOR_DIM` (default: 1536)
+- `EMBEDDINGS_MODE` (default should be local deterministic for demos)
+- `OPENAI_API_KEY` (only required if you enable external embeddings)
+- `VECTOR_DIM` (default 1536, must match the database column dimension)
 
-**Embeddings behavior:**
-- Create does not fail if the external embedding provider is unavailable (it records failure status and continues)
-- Search works in local mode without any external provider
-- Default demo posture is deterministic local embeddings, so reviewers can run it without billing setup
+### Embeddings behavior
 
-## Tech stack
+The default demo posture is deterministic local embeddings so reviewers can run everything without external billing.
 
-- FastAPI
-- SQLAlchemy
-- Alembic migrations
-- Postgres 16
-- pgvector extension
-- Docker Compose for local DB
+If external embeddings are enabled:
+- Incident creation should not fail if the provider is unavailable
+- Search should continue to work in local mode
+- Embedding status is tracked per incident (pending, ready, failed) with error details recorded
 
-## Data model (high level)
+## RBAC rules (summary)
 
-### `incident_logs`
+- **viewer**: can read incidents and search, cannot read raw
+- **responder**: can create, update, and read raw
+- **auditor**: can read audit logs and include deleted records
+- **admin**: full access, including key management within its tenant
 
-- `tenant_id`, `service`, `severity`, `title`, `tags`
-- `message_raw`, `message_redacted`
-- `embedding`, `embedding_model`, `embedding_dim`, `embedding_status`
-- soft delete fields
+**Tenant isolation** is enforced by deriving `tenant_id` from the API key context. A valid key for `demo` cannot read `acme` incidents even if the incident ID exists.
 
-### `api_keys`
+## Health and readiness
 
-- `tenant_id`, `actor_id`, `role`
-- `key_hash`, `is_active`
+- `GET /health` returns `{"status":"ok"}` if the service is up
+- `GET /ready` checks DB connectivity and returns 200 only when dependencies are reachable
 
-### `audit_logs`
-
-- `tenant_id`, `actor_id`, `action`, `resource_type`, `resource_id`
-- `request_meta`, `result_ids`
-- `prev_hash`, `hash`
+Use `/ready` for container orchestration readiness probes.
 
 ## Testing
 
@@ -212,7 +288,7 @@ pytest -q
 ## Project structure
 
 - `app/main.py` - App factory, docs, UI mount, health endpoints
-- `app/api/` - HTTP routes
+- `app/api/routes.py` - HTTP routes
 - `app/models/` - SQLAlchemy models
 - `app/crud/` - DB operations and search
 - `app/security/` - Redaction logic
@@ -224,23 +300,19 @@ pytest -q
 
 ### Port 5432 already allocated
 
+You have another Postgres container bound to the host port.
+
 Check:
 
 ```bash
 docker ps --format "table {{.Names}}\t{{.Ports}}" | grep 5432 || true
 ```
 
-**Fix:**
-- Stop the conflicting container, or
-- Change the host port mapping in `docker-compose.yaml`
-
-### Docker not found inside WSL
-
-Docker Desktop needs WSL integration enabled for your distro. Enable it in Docker Desktop settings, then restart the terminal.
+**Fix:** Stop the conflicting container or change the compose port mapping.
 
 ### 401 invalid or missing API key
 
-You are hitting a fresh DB without bootstrapped keys.
+The key is not present in `api_keys`, or you are hitting a fresh DB without bootstrapping.
 
 **Fix:**
 
@@ -249,12 +321,14 @@ export DATABASE_URL="postgresql+psycopg2://postgres:postgres@localhost:5432/inci
 python -m app.scripts.bootstrap_demo_keys
 ```
 
-### 404 incident not found when reading cross-tenant
+### Cross-tenant reads return 404
 
-Expected behavior. Incidents are tenant-scoped and filtered by `tenant_id` derived from the API key.
+Expected behavior. Incidents are tenant-scoped.
 
-### Search fails with pgvector type errors
+### Search fails with pgvector value errors
 
-This usually means the query embedding passed into pgvector is not a flat list of floats with the correct dimension. Validate that the embedding function returns exactly one vector (not a tuple or nested list) and that `VECTOR_DIM` matches what is stored.
-
-
+This usually means the query embedding being passed into the pgvector operator is not a flat list of floats with the correct dimension. Confirm:
+- The embedding function returns a single vector (not a tuple or nested list)
+- `VECTOR_DIM` matches the stored embedding dimension
+- Only incidents with `embedding_status=ready` are used for vector ranking
+```
