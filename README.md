@@ -25,29 +25,87 @@ Most incident tools either store raw JSON blobs with weak governance, or they bo
 
 ## Architecture
 
-flowchart LR
-  Client["Client (curl or UI)"] -->|"X-API-Key"| API["FastAPI"]
+flowchart TB
+  client["Client (UI or curl)"] -->|"X-API-Key"| api["FastAPI"]
+  api --> auth["Auth + RBAC"]
+  auth --> routes["Routes (/api/*)"]
 
-  API --> Auth["API key auth (RBAC)"]
-  Auth -->|"tenant_id, role"| Handlers["Route handlers"]
+  routes --> redact["Redaction"]
+  routes --> embed["Embeddings (local or external)"]
 
-  Handlers --> Redact["Redaction"]
-  Redact --> Store[("Postgres: incident_logs")]
+  redact --> incidents["Postgres: incident_logs"]
+  embed --> incidents
 
-  Handlers --> Embed["Embeddings"]
-  Embed -->|"local deterministic"| Local["Local embedder"]
-  Embed -->|"optional external"| Provider["External provider"]
-  Local --> Store
-  Provider --> Store
+  routes --> search["pgvector similarity search"]
+  search --> incidents
 
-  Handlers --> Search["pgvector similarity query"]
-  Search --> Store
+  routes --> audit["Audit append (hash chain)"]
+  audit --> auditlog["Postgres: audit_logs"]
 
-  Handlers --> Audit["Audit append (per-tenant hash chain)"]
-  Audit --> AuditStore[("Postgres: audit_logs")]
+  api --> health["GET /health"]
+  api --> ready["GET /ready"]
+  ready --> dbcheck["DB check"]
+  dbcheck --> incidents
 
-  API --> Health["Health endpoints"]
-  Health --> Ready["GET /health and GET /ready"]
-  Ready --> DBCheck["DB connectivity check"]
-  DBCheck --> Store
+
+## Request path in practice
+
+1. Client sends request with `X-API-Key`
+2. API authenticates key, derives `tenant_id` and role
+3. Payload is validated, message is redacted
+4. Incident is inserted
+5. An embedding is generated
+6. Local deterministic mode is default for demos
+7. External provider can be enabled via environment
+8. Audit log entry is appended with a chained hash per tenant
+
+---
+
+## Tech stack
+
+- FastAPI
+- SQLAlchemy
+- Alembic migrations
+- Postgres 16
+- pgvector extension
+- Docker Compose for local DB
+
+---
+
+## Data model (high level)
+
+### `incident_logs`
+
+- `tenant_id`, `service`, `severity`, `title`, `tags`
+- `message_raw`, `message_redacted`
+- `embedding`, `embedding_model`, `embedding_dim`, `embedding_status`
+- soft delete fields
+
+### `api_keys`
+
+- `tenant_id`, `actor_id`, `role`
+- `key_hash`, `is_active`
+
+### `audit_logs`
+
+- `tenant_id`, `actor_id`, `action`, `resource_type`, `resource_id`
+- `request_meta`, `result_ids`
+- `prev_hash`, `hash`
+
+---
+
+## Local quickstart
+
+### Prereqs
+
+- Python 3.12
+- Docker Desktop with WSL integration enabled
+- `jq` (optional, but useful)
+
+### 1) Start Postgres (pgvector image)
+
+```bash
+docker compose up -d db
+docker compose ps
+
 
